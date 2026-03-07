@@ -8,7 +8,7 @@ from openai.types.chat import (
     ChatCompletionSystemMessageParam,
 )
 
-from tools import get_tool, tools
+from tools import AgentTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
@@ -20,9 +20,17 @@ _client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 
 class Agent:
-    def __init__(self, model: str, *, system_prompt: str | None = None):
-        self.model: str = model
-        self.system_prompt: str | None = system_prompt
+    def __init__(
+        self,
+        model: str,
+        agent_tools: list[type[AgentTool]],
+        *,
+        system_prompt: str | None = None,
+    ):
+        self.model = model
+        self.system_prompt = system_prompt
+        self._tools_map = {cls.tool_name(): cls for cls in agent_tools}
+        self._tools_schema = [cls.to_json_schema() for cls in agent_tools]
 
     def run(self, messages: list[ChatCompletionMessageParam]):
         if self.system_prompt:
@@ -36,7 +44,7 @@ class Agent:
             chat = _client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=tools,
+                tools=self._tools_schema,
             )
 
             if not chat.choices or len(chat.choices) == 0:
@@ -84,11 +92,13 @@ class Agent:
     def _execute_tool(self, tool_name: str, args_str: str) -> str:
         try:
             args = json.loads(args_str)
-            tool = get_tool(tool_name)
+            tool_cls = self._tools_map.get(tool_name)
 
-            if tool:
-                return tool(**args)
-            return "Invalid tool"
+            if not tool_cls:
+                return "Invalid tool"
+            tool = tool_cls(**args)
+            result = tool.execute()
+            return result.result
         except json.JSONDecodeError:
             return "An error occurred while parsing the arguments"
         except Exception as e:
