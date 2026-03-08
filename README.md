@@ -18,9 +18,7 @@ A terminal-based agent harness for running AI agents with simple file system and
 ## Installation
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync
 ```
 
 ## Usage
@@ -36,7 +34,7 @@ export OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
 **Run the agent:**
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 You will see a prompt (`> `). Type instructions or questions. For example:
@@ -73,7 +71,7 @@ Tests are in the `tests/` folder.
 To run tests:
 
 ```bash
-pytest
+uv run pytest
 ```
 
 ## License
