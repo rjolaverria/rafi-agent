@@ -1,23 +1,14 @@
-from hooks import ToolCallHook, ResponseHook, ToolResultHook, Hooks
 import json
-import os
 
-from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
 )
 
+from hooks import Hooks, ResponseHook, ToolCallHook, ToolResultHook
+from model import Model
 from tools import AgentTool
-
-API_KEY = os.getenv("OPENROUTER_API_KEY")
-BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
-
-if not API_KEY:
-    raise RuntimeError("OPENROUTER_API_KEY is not set")
-
-_client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 
 def _ensure_list[T](value: list[T] | T | None) -> list[T]:
@@ -29,7 +20,7 @@ def _ensure_list[T](value: list[T] | T | None) -> list[T]:
 class Agent:
     def __init__(
         self,
-        model: str,
+        model: Model,
         *,
         agent_tools: list[type[AgentTool]],
         system_prompt: str | None = None,
@@ -37,7 +28,7 @@ class Agent:
         on_tool_call: list[ToolCallHook] | ToolCallHook | None = None,
         on_tool_result: list[ToolResultHook] | ToolResultHook | None = None,
     ):
-        self.model = model
+        self.model: Model = model
         self.system_prompt = system_prompt
         self._tools_map = {cls.tool_name(): cls for cls in agent_tools}
         self._tools_schema = [cls.to_json_schema() for cls in agent_tools]
@@ -56,8 +47,8 @@ class Agent:
                 *messages,
             ]
         while True:
-            chat = _client.chat.completions.create(
-                model=self.model,
+            chat = self.model.client.chat.completions.create(
+                model=self.model.name,
                 messages=messages,
                 tools=self._tools_schema,
             )
@@ -65,8 +56,7 @@ class Agent:
             if not chat.choices:
                 raise RuntimeError("no choices in response")
 
-            choice = chat.choices[0]
-            message = choice.message
+            message = chat.choices[0].message
             self.hooks.trigger_response(message)
 
             fn_tool_calls = [
@@ -114,12 +104,8 @@ class Agent:
 
             tool = tool_cls(**args)
             self.hooks.trigger_tool_call(tool_name, args)
-
             result = tool.execute()
             self.hooks.trigger_tool_result(result)
-
             return result.result
-        except json.JSONDecodeError:
-            return "An error occurred while parsing the arguments"
         except Exception as e:
             return f"There was an error calling the requested tool: {e}"

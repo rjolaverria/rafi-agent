@@ -1,3 +1,6 @@
+from model import Model
+import os
+from openai import OpenAI
 import argparse
 
 from agent import Agent
@@ -9,14 +12,22 @@ SYSTEM_PROMPT = (
     "and execute bash commands to accomplish tasks on the user's behalf."
 )
 
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
+
+if not API_KEY:
+    raise RuntimeError("OPENROUTER_API_KEY is not set")
+
+client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run the agent with a message.")
-    parser.add_argument("--model", default="openai/gpt-4.1", help="Model to use")
+    parser.add_argument("--model", default="openai/gpt-5.4", help="Model to use")
     args = parser.parse_args()
 
     agent = Agent(
-        args.model,
+        Model(name=args.model, client=client),
         agent_tools=[ReadFile, WriteFile, Bash],
         system_prompt=SYSTEM_PROMPT,
         on_response=print_response,
