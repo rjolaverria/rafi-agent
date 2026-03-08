@@ -1,3 +1,4 @@
+from hooks import ToolCallHook, ResponseHook, ToolResultHook, Hooks
 import json
 import os
 
@@ -19,18 +20,32 @@ if not API_KEY:
 _client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 
+def _ensure_list[T](value: list[T] | T | None) -> list[T]:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
 class Agent:
     def __init__(
         self,
         model: str,
-        agent_tools: list[type[AgentTool]],
         *,
+        agent_tools: list[type[AgentTool]],
         system_prompt: str | None = None,
+        on_response: list[ResponseHook] | ResponseHook | None = None,
+        on_tool_call: list[ToolCallHook] | ToolCallHook | None = None,
+        on_tool_result: list[ToolResultHook] | ToolResultHook | None = None,
     ):
         self.model = model
         self.system_prompt = system_prompt
         self._tools_map = {cls.tool_name(): cls for cls in agent_tools}
         self._tools_schema = [cls.to_json_schema() for cls in agent_tools]
+        self.hooks = Hooks(
+            after_response=_ensure_list(on_response),
+            before_tool_call=_ensure_list(on_tool_call),
+            after_tool_call=_ensure_list(on_tool_result),
+        )
 
     def run(self, messages: list[ChatCompletionMessageParam]):
         if self.system_prompt:
@@ -47,11 +62,12 @@ class Agent:
                 tools=self._tools_schema,
             )
 
-            if not chat.choices or len(chat.choices) == 0:
+            if not chat.choices:
                 raise RuntimeError("no choices in response")
 
             choice = chat.choices[0]
             message = choice.message
+            self.hooks.trigger_response(message)
 
             fn_tool_calls = [
                 tc
@@ -60,7 +76,6 @@ class Agent:
             ]
 
             if not fn_tool_calls:
-                print(message.content)
                 return
 
             messages.append(
@@ -95,9 +110,14 @@ class Agent:
             tool_cls = self._tools_map.get(tool_name)
 
             if not tool_cls:
-                return "Invalid tool"
+                return f"Unknown tool '{tool_name}'. Available: {list(self._tools_map)}"
+
             tool = tool_cls(**args)
+            self.hooks.trigger_tool_call(tool_name, args)
+
             result = tool.execute()
+            self.hooks.trigger_tool_result(result)
+
             return result.result
         except json.JSONDecodeError:
             return "An error occurred while parsing the arguments"
