@@ -71,7 +71,7 @@ class Agent:
                     }
                 )
 
-            chat = self.model.client.chat.completions.create(
+            chat = await self.model.client.chat.completions.create(
                 model=self.model.name,
                 messages=messages,
                 tools=tools,

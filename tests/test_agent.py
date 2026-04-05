@@ -1,6 +1,6 @@
 import json
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from openai.types.chat import (
@@ -40,7 +40,9 @@ class FailingTool(AgentTool):
 
 @pytest.fixture()
 def mock_client() -> MagicMock:
-    return MagicMock()
+    c = MagicMock()
+    c.chat.completions.create = AsyncMock()
+    return c
 
 
 @pytest.fixture()
