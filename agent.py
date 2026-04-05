@@ -10,7 +10,11 @@ from openai.types.chat import (
 
 from hooks import Hooks, ResponseHook, ToolCallHook, ToolResultHook
 from model import Model
-from tools import AgentTool
+from tools import AgentTool, ReadTodos, ModifyTodos
+
+INTERNAL_SYSTEM_INSTRUCTIONS = """
+**IMPORTANT**: Always use todos to track progress and they must add todos before performing any actions. Do not make any assumptions about the state of the todos - always read the current list before modifying it. Each todo should be checked off when completed, and the final response should include a summary of what was accomplished and the state of the todos.
+""".strip()
 
 
 def _ensure_list[T](value: list[T] | T | None) -> list[T]:
@@ -33,8 +37,9 @@ class Agent:
     ):
         self.model: Model = model
         self.system_prompt = system_prompt
-        self._tools_map = {cls.tool_name(): cls for cls in agent_tools}
-        self._tools_schema = [cls.to_json_schema() for cls in agent_tools]
+        self._tools = agent_tools + [ReadTodos, ModifyTodos]
+        self._tools_map = {cls.tool_name(): cls for cls in self._tools}
+        self._tools_schema = [cls.to_json_schema() for cls in self._tools]
         self.max_iterations = max_iterations
         self.state = State()
         self.hooks = Hooks(
@@ -44,13 +49,14 @@ class Agent:
         )
 
     def run(self, messages: list[ChatCompletionMessageParam]):
-        if self.system_prompt:
-            messages = [
-                ChatCompletionSystemMessageParam(
-                    role="system", content=self.system_prompt
-                ),
-                *messages,
-            ]
+        messages = [
+            ChatCompletionSystemMessageParam(
+                role="system",
+                content=f"{INTERNAL_SYSTEM_INSTRUCTIONS}\n{self.system_prompt or ''}",
+            ),
+            *messages,
+        ]
+        self.state.iterations = 0
         while True:
             self.state.iterations += 1
             tools = self._tools_schema
@@ -59,7 +65,7 @@ class Agent:
                 tools = []
                 messages.append(
                     {
-                        "role": "system",
+                        "role": "user",
                         "content": f"Maximum iterations of {self.max_iterations} reached. Stopping.",
                     }
                 )
@@ -119,7 +125,7 @@ class Agent:
             if not tool_cls:
                 return f"Unknown tool '{tool_name}'. Available: {list(self._tools_map)}"
 
-            tool = tool_cls.model_validate(args)
+            tool = tool_cls.model_validate({**args, "state": self.state})
             self.hooks.trigger_tool_call(tool_name, args)
             result = tool.execute()
             self.hooks.trigger_tool_result(result)

@@ -1,21 +1,28 @@
+from typing import Any
+
+from state import State
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class ToolResult(BaseModel):
     error: bool
     name: str
     result: str
+    raw: SkipJsonSchema[Any] = None
 
     def to_message(self, tool_call_id: str) -> dict[str, str]:
         return {"role": "tool", "tool_call_id": tool_call_id, "content": self.result}
 
 
 class AgentTool(BaseModel, ABC):
+    state: SkipJsonSchema[State]
+
     @classmethod
     def tool_name(cls) -> str:
         return cls.__name__.lower()
@@ -83,9 +90,9 @@ class Bash(AgentTool):
 
             parts: list[str] = []
             if result.stdout:
-                parts.append("stdout:\n" + result.stdout)
+                parts.append(result.stdout)
             if result.stderr:
-                parts.append("stderr:\n" + result.stderr)
+                parts.append(result.stderr)
             output = "\n".join(parts) if parts else "(no output)"
             if result.returncode != 0:
                 output = f"exit code: {result.returncode}\n{output}"
@@ -100,3 +107,56 @@ class Bash(AgentTool):
                 name=self.tool_name(),
                 result="Command timed out after 30 seconds",
             )
+
+
+class ReadTodos(AgentTool):
+    """Reads the list of todos."""
+
+    def execute(self) -> ToolResult:
+        return ToolResult(
+            error=False,
+            name=self.tool_name(),
+            result=str(self.state.todos),
+            raw=self.state.todos,
+        )
+
+
+class ModifyTodos(AgentTool):
+    """Modifies the todo list. Use action 'add' to create new todos, 'remove' to delete todos, or 'complete' to mark todos as done. Always returns the updated todo list."""
+
+    action: str = Field(
+        description="The action to perform: 'add', 'remove', or 'complete'"
+    )
+    items: list[str] = Field(description="The todo items to apply the action to")
+
+    def execute(self) -> ToolResult:
+        todos = self.state.todos
+        actions = {"add": todos.add, "remove": todos.remove, "complete": todos.complete}
+
+        if self.action not in actions:
+            return ToolResult(
+                error=True,
+                name=self.tool_name(),
+                result=f"Unknown action '{self.action}'. Must be one of: add, remove, complete.",
+            )
+
+        result = actions[self.action](self.items)
+
+        if self.action == "add":
+            msg = f"Added: {result}" if result else "No new items added (duplicates)."
+        else:
+            changed, not_found = result
+            parts = []
+            if changed:
+                label = "Removed" if self.action == "remove" else "Completed"
+                parts.append(f"{label}: {changed}")
+            if not_found:
+                parts.append(f"Not found: {not_found}")
+            msg = " | ".join(parts) if parts else "No changes."
+
+        return ToolResult(
+            error=False,
+            name=self.tool_name(),
+            result=f"{msg}\n\n{todos}",
+            raw=todos,
+        )

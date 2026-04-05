@@ -5,8 +5,10 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
+from state import Todos
 from tools import ToolResult
 
 console = Console()
@@ -16,6 +18,8 @@ TOOL_ARGS_DISPLAY: dict[str, list[str]] = {
     "readfile": ["file_path"],
     "writefile": ["file_path"],
 }
+
+HIDDEN_TOOL_CALLS = {"readtodos", "modifytodos"}
 
 
 def print_response(message: ChatCompletionMessage) -> None:
@@ -28,6 +32,9 @@ def print_response(message: ChatCompletionMessage) -> None:
 
 
 def print_tool_call(tool_name: str, args: Any) -> None:
+    if tool_name in HIDDEN_TOOL_CALLS:
+        return
+
     label = Text()
     label.append(" " + tool_name + " ", style="bold white on blue")
 
@@ -57,8 +64,34 @@ def print_tool_call(tool_name: str, args: Any) -> None:
                 console.print(Text(f"  {key}: {content}", style="dim"))
 
 
+def _render_todos(todos: Todos) -> Table:
+    table = Table(show_header=False, show_edge=False, pad_edge=False, padding=(0, 1))
+    table.add_column(width=1, justify="center")
+    table.add_column()
+    for item, done in todos._items.items():
+        if done:
+            table.add_row(
+                Text("✓", style="green bold"),
+                Text(item, style="strikethrough dim"),
+            )
+        else:
+            table.add_row(Text("○", style="yellow"), Text(item))
+    return table
+
+
 def print_tool_result(tool_result: ToolResult) -> None:
     if not tool_result.result:
+        return
+
+    if isinstance(tool_result.raw, Todos):
+        todos = tool_result.raw
+        if not todos._items:
+            content = Text("No todos.", style="dim")
+        else:
+            content = _render_todos(todos)
+        console.print(
+            Panel(content, border_style="cyan", title="Todos", title_align="left")
+        )
         return
 
     style = "red" if tool_result.error else "green"

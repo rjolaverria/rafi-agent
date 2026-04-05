@@ -110,13 +110,18 @@ class TestAgentInit:
 
     def test_tools_schema_generated(self, model: Model):
         agent = Agent(model, agent_tools=[FakeTool])
-        assert len(agent._tools_schema) == 1
-        assert agent._tools_schema[0]["function"]["name"] == "faketool"
+        names = [s["function"]["name"] for s in agent._tools_schema]
+        assert "faketool" in names
+        assert "readtodos" in names
+        assert "modifytodos" in names
+        assert len(agent._tools_schema) == 3
 
     def test_multiple_tools(self, model: Model):
         agent = Agent(model, agent_tools=[FakeTool, FailingTool])
-        assert len(agent._tools_map) == 2
-        assert len(agent._tools_schema) == 2
+        assert (
+            len(agent._tools_map) == 4
+        )  # FakeTool + FailingTool + ReadTodos + ModifyTodos
+        assert len(agent._tools_schema) == 4
 
     def test_system_prompt_stored(self, model: Model):
         agent = Agent(model, agent_tools=[], system_prompt="Be helpful")
@@ -180,7 +185,7 @@ class TestAgentRun:
         call_args = mock_client.chat.completions.create.call_args
         messages = call_args.kwargs["messages"]
         assert messages[0]["role"] == "system"
-        assert messages[0]["content"] == "You are helpful"
+        assert "You are helpful" in messages[0]["content"]
         assert messages[1] == {"role": "user", "content": "hi"}
 
     def test_no_system_prompt_not_prepended(self, model: Model, mock_client: MagicMock):
@@ -189,7 +194,9 @@ class TestAgentRun:
         agent.run([{"role": "user", "content": "hi"}])
         call_args = mock_client.chat.completions.create.call_args
         messages = call_args.kwargs["messages"]
-        assert messages[0] == {"role": "user", "content": "hi"}
+        assert messages[0]["role"] == "system"
+        assert "You are helpful" not in messages[0]["content"]
+        assert messages[1] == {"role": "user", "content": "hi"}
 
     def test_executes_tool_and_loops(self, model: Model, mock_client: MagicMock):
         tc = _make_fn_tool_call("faketool", {"value": "abc"})
@@ -238,7 +245,7 @@ class TestAgentRun:
         second_call_messages = mock_client.chat.completions.create.call_args_list[
             1
         ].kwargs["messages"]
-        assistant_msg = second_call_messages[1]
+        assistant_msg = second_call_messages[2]
         assert assistant_msg["role"] == "assistant"
         assert assistant_msg["content"] == "thinking"
         assert len(assistant_msg["tool_calls"]) == 1
@@ -280,6 +287,22 @@ class TestAgentRun:
         call_args = mock_client.chat.completions.create.call_args
         assert call_args.kwargs["model"] == "test-model"
 
+    def test_iterations_reset_between_runs(self, model: Model, mock_client: MagicMock):
+        tc = _make_fn_tool_call("faketool", {"value": "a"})
+        mock_client.chat.completions.create.side_effect = [
+            _make_completion(content="call", tool_calls=[tc]),
+            _make_completion(content="done"),
+        ]
+        agent = Agent(model, agent_tools=[FakeTool])
+        agent.run([{"role": "user", "content": "first"}])
+        assert agent.state.iterations == 2
+
+        mock_client.chat.completions.create.side_effect = [
+            _make_completion(content="done"),
+        ]
+        agent.run([{"role": "user", "content": "second"}])
+        assert agent.state.iterations == 1
+
 
 # ── Agent._execute_tool ─────────────────────────────────────────────────────
 
@@ -299,7 +322,7 @@ class TestExecuteTool:
     def test_invalid_json_returns_error(self, model: Model):
         agent = Agent(model, agent_tools=[FakeTool])
         result = agent._execute_tool("faketool", "not json")
-        assert "error" in result.lower()
+        assert "not valid JSON" in result
 
     def test_tool_execution_error_returns_error(self, model: Model):
         agent = Agent(model, agent_tools=[FailingTool])

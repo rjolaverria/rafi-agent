@@ -1,7 +1,15 @@
 import json
 from typing import Any
 
+import pytest
+
+from state import State
 from tools import AgentTool, Bash, ReadFile, ToolResult, WriteFile
+
+
+@pytest.fixture()
+def state():
+    return State()
 
 
 class TestToolResult:
@@ -12,94 +20,94 @@ class TestToolResult:
 
 
 class TestReadFile:
-    def test_reads_existing_file(self, tmp_path):
+    def test_reads_existing_file(self, tmp_path, state):
         f = tmp_path / "hello.txt"
         f.write_text("hello world")
-        result = ReadFile(file_path=str(f)).execute()
+        result = ReadFile(state=state, file_path=str(f)).execute()
         assert not result.error
         assert result.result == "hello world"
 
-    def test_error_on_missing_file(self):
-        result = ReadFile(file_path="/nonexistent/path/file.txt").execute()
+    def test_error_on_missing_file(self, state):
+        result = ReadFile(state=state, file_path="/nonexistent/path/file.txt").execute()
         assert result.error
         assert "File not found" in result.result
 
-    def test_reads_empty_file(self, tmp_path):
+    def test_reads_empty_file(self, tmp_path, state):
         f = tmp_path / "empty.txt"
         f.write_text("")
-        result = ReadFile(file_path=str(f)).execute()
+        result = ReadFile(state=state, file_path=str(f)).execute()
         assert not result.error
         assert result.result == ""
 
 
 class TestWriteFile:
-    def test_writes_to_new_file(self, tmp_path):
+    def test_writes_to_new_file(self, tmp_path, state):
         f = tmp_path / "out.txt"
-        result = WriteFile(file_path=str(f), content="content").execute()
+        result = WriteFile(state=state, file_path=str(f), content="content").execute()
         assert not result.error
         assert "Successfully wrote" in result.result
         assert f.read_text() == "content"
 
-    def test_overwrites_existing_file(self, tmp_path):
+    def test_overwrites_existing_file(self, tmp_path, state):
         f = tmp_path / "out.txt"
         f.write_text("old")
-        WriteFile(file_path=str(f), content="new").execute()
+        WriteFile(state=state, file_path=str(f), content="new").execute()
         assert f.read_text() == "new"
 
-    def test_creates_parent_directories(self, tmp_path):
+    def test_creates_parent_directories(self, tmp_path, state):
         f = tmp_path / "a" / "b" / "c.txt"
-        result = WriteFile(file_path=str(f), content="nested").execute()
+        result = WriteFile(state=state, file_path=str(f), content="nested").execute()
         assert not result.error
         assert f.read_text() == "nested"
 
-    def test_writes_empty_content(self, tmp_path):
+    def test_writes_empty_content(self, tmp_path, state):
         f = tmp_path / "empty.txt"
-        WriteFile(file_path=str(f), content="").execute()
+        WriteFile(state=state, file_path=str(f), content="").execute()
         assert f.read_text() == ""
 
 
 class TestBash:
-    def test_stdout(self):
-        result = Bash(command="echo hello").execute()
+    def test_stdout(self, state):
+        result = Bash(state=state, command="echo hello").execute()
         assert not result.error
-        assert result.result == "stdout:\nhello"
+        assert result.result == "hello"
 
-    def test_stderr(self):
-        result = Bash(command="echo err >&2").execute()
-        assert result.result == "stderr:\nerr"
+    def test_stderr(self, state):
+        result = Bash(state=state, command="echo err >&2").execute()
+        assert result.result == "err"
 
-    def test_stdout_and_stderr(self):
-        result = Bash(command="echo out && echo err >&2").execute()
-        assert "stdout:\nout" in result.result
-        assert "stderr:\nerr" in result.result
+    def test_stdout_and_stderr(self, state):
+        result = Bash(state=state, command="echo out && echo err >&2").execute()
+        assert "out" in result.result
+        assert "err" in result.result
 
-    def test_no_output(self):
-        result = Bash(command="true").execute()
+    def test_no_output(self, state):
+        result = Bash(state=state, command="true").execute()
         assert result.result == "(no output)"
 
-    def test_nonzero_exit_code(self):
-        result = Bash(command="false").execute()
+    def test_nonzero_exit_code(self, state):
+        result = Bash(state=state, command="false").execute()
         assert result.error
         assert result.result.startswith("exit code: 1")
 
-    def test_nonzero_exit_with_stderr(self):
-        result = Bash(command="echo fail >&2 && exit 2").execute()
+    def test_nonzero_exit_with_stderr(self, state):
+        result = Bash(state=state, command="echo fail >&2 && exit 2").execute()
         assert result.error
         assert "exit code: 2" in result.result
-        assert "stderr:\nfail" in result.result
+        assert "fail" in result.result
 
-    def test_pipes(self):
-        result = Bash(command="echo 'a b c' | wc -w").execute()
+    def test_pipes(self, state):
+        result = Bash(state=state, command="echo 'a b c' | wc -w").execute()
         assert "3" in result.result
 
-    def test_timeout(self, monkeypatch):
+    def test_timeout(self, monkeypatch, state):
         import subprocess as sp
 
         def mock_run(*args, **kwargs):
             raise sp.TimeoutExpired(cmd="sleep 60", timeout=30)
 
         monkeypatch.setattr(sp, "run", mock_run)
-        result = Bash(command="sleep 60").execute()
+        result = Bash(state=state, command="sleep 60").execute()
         assert result.error
         assert "timed out" in result.result
 
