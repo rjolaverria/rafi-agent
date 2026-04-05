@@ -5,6 +5,8 @@ import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import web_search
+
 from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
@@ -160,3 +162,34 @@ class ModifyTodos(AgentTool):
             result=f"{msg}\n\n{todos}",
             raw=todos,
         )
+
+
+class SearchWeb(AgentTool):
+    """Searches the web and returns the results with citations."""
+
+    query: str = Field(description="The search query")
+
+    def execute(self) -> ToolResult:
+        try:
+            results = web_search.search(self.query)
+
+            formatted: list[str] = []
+            for r in results:
+                parts = [f"**{r['title']}**", r["url"]]
+                if r["highlights"]:
+                    parts.append(r["highlights"])
+                formatted.append("\n".join(parts))
+
+            return ToolResult(
+                error=False,
+                name=self.tool_name(),
+                result="\n\n---\n\n".join(formatted)
+                if formatted
+                else "No results found.",
+            )
+        except Exception as e:
+            return ToolResult(
+                error=True,
+                name=self.tool_name(),
+                result=f"Search failed: {e}",
+            )

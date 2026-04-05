@@ -5,7 +5,7 @@ import argparse
 
 from agent import Agent
 from display import print_response, print_tool_call, print_tool_result
-from tools import Bash, ReadFile, WriteFile
+from tools import Bash, ReadFile, WriteFile, SearchWeb
 
 SYSTEM_PROMPT = (
     "You are a helpful computer use agent. You can read and write files, "
@@ -28,7 +28,7 @@ def main():
 
     agent = Agent(
         Model(name=args.model, client=client),
-        agent_tools=[ReadFile, WriteFile, Bash],
+        agent_tools=[ReadFile, WriteFile, Bash, SearchWeb],
         system_prompt=SYSTEM_PROMPT,
         on_response=print_response,
         on_tool_call=print_tool_call,
