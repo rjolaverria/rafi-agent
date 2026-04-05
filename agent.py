@@ -1,5 +1,4 @@
-from pydantic import ValidationError
-from state import State
+import inspect
 import json
 
 from openai.types.chat import (
@@ -7,10 +6,12 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
 )
+from pydantic import ValidationError
 
 from hooks import Hooks, ResponseHook, ToolCallHook, ToolResultHook
 from model import Model
-from tools import AgentTool, ReadTodos, ModifyTodos
+from state import AgentState
+from tools import AgentTool, ModifyTodos, ReadTodos, ToolResult
 
 INTERNAL_SYSTEM_INSTRUCTIONS = """
 **IMPORTANT**: Always use todos to track progress and they must add todos before performing any actions. Do not make any assumptions about the state of the todos - always read the current list before modifying it. Each todo should be checked off when completed, and the final response should include a summary of what was accomplished and the state of the todos.
@@ -41,14 +42,14 @@ class Agent:
         self._tools_map = {cls.tool_name(): cls for cls in self._tools}
         self._tools_schema = [cls.to_json_schema() for cls in self._tools]
         self.max_iterations = max_iterations
-        self.state = State()
+        self.state = AgentState()
         self.hooks = Hooks(
             after_response=_ensure_list(on_response),
             before_tool_call=_ensure_list(on_tool_call),
             after_tool_call=_ensure_list(on_tool_result),
         )
 
-    def run(self, messages: list[ChatCompletionMessageParam]):
+    async def run(self, messages: list[ChatCompletionMessageParam]):
         messages = [
             ChatCompletionSystemMessageParam(
                 role="system",
@@ -110,14 +111,14 @@ class Agent:
             )
 
             for tool_call in fn_tool_calls:
-                result = self._execute_tool(
+                result = await self._execute_tool(
                     tool_call.function.name, tool_call.function.arguments
                 )
                 messages.append(
                     {"role": "tool", "tool_call_id": tool_call.id, "content": result}
                 )
 
-    def _execute_tool(self, tool_name: str, args_str: str) -> str:
+    async def _execute_tool(self, tool_name: str, args_str: str) -> str:
         try:
             args = json.loads(args_str)
             tool_cls = self._tools_map.get(tool_name)
@@ -127,7 +128,8 @@ class Agent:
 
             tool = tool_cls.model_validate({**args, "state": self.state})
             self.hooks.trigger_tool_call(tool_name, args)
-            result = tool.execute()
+            raw = tool.execute()
+            result: ToolResult = await raw if inspect.isawaitable(raw) else raw  # type: ignore[assignment]
             self.hooks.trigger_tool_result(result)
             return result.result
         except json.JSONDecodeError:

@@ -40,6 +40,6 @@ class Todos:
 
 
 @dataclass(slots=True)
-class State:
+class AgentState:
     iterations: int = 0
     todos: Todos = field(default_factory=Todos)

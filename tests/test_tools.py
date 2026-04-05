@@ -3,13 +3,13 @@ from typing import Any
 
 import pytest
 
-from state import State
+from state import AgentState
 from tools import AgentTool, Bash, ReadFile, ToolResult, WriteFile
 
 
 @pytest.fixture()
 def state():
-    return State()
+    return AgentState()
 
 
 class TestToolResult:

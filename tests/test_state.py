@@ -1,4 +1,4 @@
-from state import State, Todos
+from state import AgentState, Todos
 
 
 class TestTodos:
@@ -89,8 +89,8 @@ class TestTodosStr:
         assert str(todos) == "- [ ] a\n- [x] b\n- [ ] c"
 
 
-class TestState:
+class TestAgentState:
     def test_defaults(self):
-        state = State()
+        state = AgentState()
         assert state.iterations == 0
         assert str(state.todos) == "No todos."

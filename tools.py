@@ -1,15 +1,15 @@
-from typing import Any
-
-from state import State
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
-
-import web_search
+from collections.abc import Awaitable
+from typing import Any
 
 from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
+
+import web_search
+from state import AgentState
 
 
 class ToolResult(BaseModel):
@@ -23,7 +23,7 @@ class ToolResult(BaseModel):
 
 
 class AgentTool(BaseModel, ABC):
-    state: SkipJsonSchema[State]
+    state: SkipJsonSchema[AgentState]
 
     @classmethod
     def tool_name(cls) -> str:
@@ -43,7 +43,7 @@ class AgentTool(BaseModel, ABC):
         }
 
     @abstractmethod
-    def execute(self) -> ToolResult: ...
+    def execute(self) -> ToolResult | Awaitable[ToolResult]: ...
 
 
 class ReadFile(AgentTool):
