@@ -19,7 +19,7 @@ TOOL_ARGS_DISPLAY: dict[str, list[str]] = {
     "writefile": ["file_path"],
 }
 
-HIDDEN_TOOL_CALLS = {"readtodos", "modifytodos"}
+HIDDEN_TOOL_CALLS = {"readtodos", "modifytodos", "runsubagents"}
 
 
 def print_response(message: ChatCompletionMessage) -> None:

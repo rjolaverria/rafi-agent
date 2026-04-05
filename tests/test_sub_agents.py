@@ -45,14 +45,13 @@ class TestRunSubAgent:
         mock_agent = AsyncMock()
 
         async def fake_run(messages):
-            # Simulate the on_response callback capturing a response
             pass
 
         mock_agent.run = fake_run
 
         with patch("sub_agents.Agent") as MockAgent:
             MockAgent.return_value = mock_agent
-            result = await tool.run_sub_agent("test query")
+            result = await tool.run_sub_agent(0, "test query")
 
         assert result["query"] == "test query"
         assert "results" in result
@@ -65,7 +64,7 @@ class TestRunSubAgent:
         mock_agent.run = AsyncMock()
 
         with patch("sub_agents.Agent", return_value=mock_agent):
-            await tool.run_sub_agent("find files")
+            await tool.run_sub_agent(0, "find files")
 
         mock_agent.run.assert_called_once_with(
             [{"role": "user", "content": "find files"}]
@@ -79,7 +78,7 @@ class TestRunSubAgent:
         mock_agent.run = AsyncMock()
 
         with patch("sub_agents.Agent", return_value=mock_agent) as MockAgent:
-            await tool.run_sub_agent("q")
+            await tool.run_sub_agent(0, "q")
 
         _, kwargs = MockAgent.call_args
         assert kwargs["system_prompt"] == SUB_AGENT_SYSTEM_PROMPT
@@ -98,9 +97,8 @@ class TestRunSubAgent:
             return agent
 
         with patch("sub_agents.Agent", side_effect=capture_agent):
-            result = await tool.run_sub_agent("q")
+            result = await tool.run_sub_agent(0, "q")
 
-        # The results list was empty since run was mocked (no callbacks fired)
         assert result["results"] == ""
 
     @pytest.mark.asyncio
@@ -116,7 +114,6 @@ class TestRunSubAgent:
 
             async def fake_run(messages):
                 assert captured_callback is not None
-                # Simulate responses coming in
                 msg1 = MagicMock()
                 msg1.content = "hello "
                 captured_callback(msg1)
@@ -128,7 +125,7 @@ class TestRunSubAgent:
             return agent
 
         with patch("sub_agents.Agent", side_effect=capture_agent):
-            result = await tool.run_sub_agent("q")
+            result = await tool.run_sub_agent(0, "q")
 
         assert result["results"] == "hello world"
 
@@ -153,7 +150,7 @@ class TestRunSubAgent:
             return agent
 
         with patch("sub_agents.Agent", side_effect=capture_agent):
-            result = await tool.run_sub_agent("q")
+            result = await tool.run_sub_agent(0, "q")
 
         assert result["results"] == ""
 
@@ -197,7 +194,11 @@ class TestRunSubAgentsExecute:
             agent.run = AsyncMock()
             return agent
 
-        with patch("sub_agents.Agent", side_effect=make_agent):
+        with (
+            patch("sub_agents.Agent", side_effect=make_agent),
+            patch("sub_agents.SubAgentProgressDisplay") as MockDisplay,
+        ):
+            MockDisplay.return_value = MagicMock()
             result = await tool.execute()
 
         assert isinstance(result, ToolResult)
@@ -226,7 +227,18 @@ class TestRunSubAgentsExecute:
             agent.run = fake_run
             return agent
 
-        with patch("sub_agents.Agent", side_effect=make_agent):
+        with (
+            patch("sub_agents.Agent", side_effect=make_agent),
+            patch("sub_agents.SubAgentProgressDisplay") as MockDisplay,
+        ):
+            mock_display = MagicMock()
+            mock_display.make_hooks.return_value = (
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+            )
+            mock_display._statuses = [MagicMock(), MagicMock()]
+            MockDisplay.return_value = mock_display
             result = await tool.execute()
 
         assert "---" in result.result
@@ -242,8 +254,46 @@ class TestRunSubAgentsExecute:
             agent.run = AsyncMock()
             return agent
 
-        with patch("sub_agents.Agent", side_effect=make_agent):
+        with (
+            patch("sub_agents.Agent", side_effect=make_agent),
+            patch("sub_agents.SubAgentProgressDisplay") as MockDisplay,
+        ):
+            mock_display = MagicMock()
+            mock_display.make_hooks.return_value = (
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+            )
+            mock_display._statuses = [MagicMock()]
+            MockDisplay.return_value = mock_display
             result = await tool.execute()
 
         assert "---" not in result.result
         assert "**only one**" in result.result
+
+    @pytest.mark.asyncio
+    async def test_display_lifecycle(self, state):
+        """Verify display.start() and display.stop() are called around execution."""
+        tool = RunSubAgents(state=state, instructions=["q1"])
+
+        def make_agent(*args, **kwargs):
+            agent = AsyncMock()
+            agent.run = AsyncMock()
+            return agent
+
+        with (
+            patch("sub_agents.Agent", side_effect=make_agent),
+            patch("sub_agents.SubAgentProgressDisplay") as MockDisplay,
+        ):
+            mock_display = MagicMock()
+            mock_display.make_hooks.return_value = (
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+            )
+            mock_display._statuses = [MagicMock()]
+            MockDisplay.return_value = mock_display
+            await tool.execute()
+
+        mock_display.start.assert_called_once()
+        mock_display.stop.assert_called_once()
