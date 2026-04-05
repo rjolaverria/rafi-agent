@@ -1,3 +1,5 @@
+from pydantic import ValidationError
+from state import State
 import json
 
 from openai.types.chat import (
@@ -27,11 +29,14 @@ class Agent:
         on_response: list[ResponseHook] | ResponseHook | None = None,
         on_tool_call: list[ToolCallHook] | ToolCallHook | None = None,
         on_tool_result: list[ToolResultHook] | ToolResultHook | None = None,
+        max_iterations: int = 15,
     ):
         self.model: Model = model
         self.system_prompt = system_prompt
         self._tools_map = {cls.tool_name(): cls for cls in agent_tools}
         self._tools_schema = [cls.to_json_schema() for cls in agent_tools]
+        self.max_iterations = max_iterations
+        self.state = State()
         self.hooks = Hooks(
             after_response=_ensure_list(on_response),
             before_tool_call=_ensure_list(on_tool_call),
@@ -47,10 +52,22 @@ class Agent:
                 *messages,
             ]
         while True:
+            self.state.iterations += 1
+            tools = self._tools_schema
+
+            if self.state.iterations >= self.max_iterations:
+                tools = []
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"Maximum iterations of {self.max_iterations} reached. Stopping.",
+                    }
+                )
+
             chat = self.model.client.chat.completions.create(
                 model=self.model.name,
                 messages=messages,
-                tools=self._tools_schema,
+                tools=tools,
             )
 
             if not chat.choices:
@@ -102,10 +119,14 @@ class Agent:
             if not tool_cls:
                 return f"Unknown tool '{tool_name}'. Available: {list(self._tools_map)}"
 
-            tool = tool_cls(**args)
+            tool = tool_cls.model_validate(args)
             self.hooks.trigger_tool_call(tool_name, args)
             result = tool.execute()
             self.hooks.trigger_tool_result(result)
             return result.result
+        except json.JSONDecodeError:
+            return f"Invalid arguments format for tool '{tool_name}' - not valid JSON: {args_str}"
+        except ValidationError as ve:
+            return f"Invalid arguments for tool '{tool_name}': {ve}"
         except Exception as e:
             return f"There was an error calling the requested tool: {e}"
