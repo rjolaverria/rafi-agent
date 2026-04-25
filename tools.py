@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
 import web_search
-from state import AgentState
+from state import AgentState, Skill
 
 
 class ToolResult(BaseModel):
@@ -193,3 +193,32 @@ class SearchWeb(AgentTool):
                 name=self.tool_name(),
                 result=f"Search failed: {e}",
             )
+
+
+class UseSkill(AgentTool):
+    """Loads the full instructions for a named skill. Call this when the task matches one of the available skills listed in the system prompt."""
+
+    skill_name: str = Field(description="The name of the skill to load")
+
+    def execute(self) -> ToolResult:
+        skill: Skill | None = self.state.skills_registry.get(self.skill_name)
+        if not skill:
+            available = list(self.state.skills_registry)
+            return ToolResult(
+                error=True,
+                name=self.tool_name(),
+                result=f"Unknown skill '{self.skill_name}'. Available: {available}",
+            )
+
+        content = skill.path.read_text()
+
+        skill_dir = skill.path.parent
+        siblings = sorted(p for p in skill_dir.iterdir() if p.name != "SKILL.md")
+        if siblings:
+            names = "\n".join(f"  - {p.name}" for p in siblings)
+            content += (
+                f"\n\n---\nThe above is SKILL.md. Additional reference files are available"
+                f" in `{skill_dir}/`:\n{names}"
+            )
+
+        return ToolResult(error=False, name=self.tool_name(), result=content)

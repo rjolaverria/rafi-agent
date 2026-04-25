@@ -9,10 +9,9 @@ from pydantic import ValidationError
 
 from hooks import Hooks, ResponseHook, ToolCallHook, ToolResultHook
 from model import Model
-from skill_types import Skill
-from skills import UseSkill, format_skills_for_prompt
-from state import AgentState
-from tools import AgentTool, ModifyTodos, ReadTodos, ToolResult
+from skills import format_skills_for_prompt
+from state import AgentState, Skill
+from tools import AgentTool, ModifyTodos, ReadTodos, ToolResult, UseSkill
 
 INTERNAL_SYSTEM_INSTRUCTIONS = """
 **IMPORTANT**: Always use todos to track progress and they must add todos before performing any actions. Do not make any assumptions about the state of the todos - always read the current list before modifying it. Each todo should be checked off when completed, and the final response should include a summary of what was accomplished and the state of the todos.

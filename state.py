@@ -1,6 +1,12 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from skill_types import Skill
+
+@dataclass
+class Skill:
+    name: str
+    description: str
+    path: Path
 
 
 @dataclass(slots=True)

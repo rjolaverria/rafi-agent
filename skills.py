@@ -1,10 +1,7 @@
 import re
 from pathlib import Path
 
-from pydantic import Field
-
-from skill_types import Skill
-from tools import AgentTool, ToolResult
+from state import Skill
 
 
 def _parse_frontmatter(content: str) -> dict[str, str]:
@@ -52,33 +49,3 @@ def format_skills_for_prompt(skills: list[Skill]) -> str:
     for skill in skills:
         lines.append(f"- **{skill.name}**: {skill.description}")
     return "\n".join(lines)
-
-
-class UseSkill(AgentTool):
-    """Loads the full instructions for a named skill. Call this when the task matches one of the available skills listed in the system prompt."""
-
-    skill_name: str = Field(description="The name of the skill to load")
-
-    def execute(self) -> ToolResult:
-        registry: dict[str, Skill] = self.state.skills_registry  # type: ignore[assignment]
-        skill = registry.get(self.skill_name)
-        if not skill:
-            available = list(registry)
-            return ToolResult(
-                error=True,
-                name=self.tool_name(),
-                result=f"Unknown skill '{self.skill_name}'. Available: {available}",
-            )
-
-        content = skill.path.read_text()
-
-        skill_dir = skill.path.parent
-        siblings = sorted(p for p in skill_dir.iterdir() if p.name != "SKILL.md")
-        if siblings:
-            names = "\n".join(f"  - {p.name}" for p in siblings)
-            content += (
-                f"\n\n---\nThe above is SKILL.md. Additional reference files are available"
-                f" in `{skill_dir}/`:\n{names}"
-            )
-
-        return ToolResult(error=False, name=self.tool_name(), result=content)
