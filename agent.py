@@ -1,7 +1,5 @@
 import inspect
 import json
-from typing import TYPE_CHECKING
-
 from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageParam,
@@ -11,11 +9,9 @@ from pydantic import ValidationError
 
 from hooks import Hooks, ResponseHook, ToolCallHook, ToolResultHook
 from model import Model
+from skills import Skill, UseSkill, format_skills_for_prompt
 from state import AgentState
 from tools import AgentTool, ModifyTodos, ReadTodos, ToolResult
-
-if TYPE_CHECKING:
-    from skills import Skill
 
 INTERNAL_SYSTEM_INSTRUCTIONS = """
 **IMPORTANT**: Always use todos to track progress and they must add todos before performing any actions. Do not make any assumptions about the state of the todos - always read the current list before modifying it. Each todo should be checked off when completed, and the final response should include a summary of what was accomplished and the state of the todos.
@@ -34,7 +30,7 @@ class Agent:
         model: Model,
         *,
         agent_tools: list[type[AgentTool]],
-        skills: "list[Skill] | None" = None,
+        skills: list[Skill] | None = None,
         system_prompt: str | None = None,
         on_response: list[ResponseHook] | ResponseHook | None = None,
         on_tool_call: list[ToolCallHook] | ToolCallHook | None = None,
@@ -44,11 +40,12 @@ class Agent:
         self.model: Model = model
         self.system_prompt = system_prompt
         self._skills: list[Skill] = skills or []
-        self._tools = agent_tools + [ReadTodos, ModifyTodos]
+        skill_tools: list[type[AgentTool]] = [UseSkill] if self._skills else []
+        self._tools = agent_tools + [ReadTodos, ModifyTodos] + skill_tools
         self._tools_map = {cls.tool_name(): cls for cls in self._tools}
         self._tools_schema = [cls.to_json_schema() for cls in self._tools]
         self.max_iterations = max_iterations
-        self.state = AgentState()
+        self.state = AgentState(skills_registry={s.name: s for s in self._skills})
         self.hooks = Hooks(
             after_response=_ensure_list(on_response),
             before_tool_call=_ensure_list(on_tool_call),
@@ -56,8 +53,6 @@ class Agent:
         )
 
     def _build_system_prompt(self) -> str:
-        from skills import format_skills_for_prompt
-
         parts = [INTERNAL_SYSTEM_INSTRUCTIONS]
         skills_section = format_skills_for_prompt(self._skills)
         if skills_section:
