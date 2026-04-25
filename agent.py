@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from hooks import Hooks, ResponseHook, ToolCallHook, ToolResultHook
 from model import Model
-from skills import Skill, UseSkill, format_skills_for_prompt
+from skill_types import Skill
+from skills import UseSkill, format_skills_for_prompt
 from state import AgentState
 from tools import AgentTool, ModifyTodos, ReadTodos, ToolResult
 

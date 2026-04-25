@@ -1,17 +1,10 @@
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import Field
 
+from skill_types import Skill
 from tools import AgentTool, ToolResult
-
-
-@dataclass
-class Skill:
-    name: str
-    description: str
-    path: Path
 
 
 def _parse_frontmatter(content: str) -> dict[str, str]:

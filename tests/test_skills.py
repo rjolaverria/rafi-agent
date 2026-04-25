@@ -5,7 +5,8 @@ import pytest
 
 from agent import Agent
 from model import Model
-from skills import Skill, UseSkill, _parse_frontmatter, format_skills_for_prompt, load_skills
+from skill_types import Skill
+from skills import UseSkill, _parse_frontmatter, format_skills_for_prompt, load_skills
 from state import AgentState
 
 
