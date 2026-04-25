@@ -17,9 +17,10 @@ TOOL_ARGS_DISPLAY: dict[str, list[str]] = {
     "bash": ["command"],
     "readfile": ["file_path"],
     "writefile": ["file_path"],
+    "useskill": ["skill_name"],
 }
 
-HIDDEN_TOOL_CALLS = {"readtodos", "modifytodos", "runsubagents"}
+HIDDEN_TOOL_CALLS = {"readtodos", "modifytodos", "runsubagents", "listskills"}
 
 
 def print_response(message: ChatCompletionMessage) -> None:
