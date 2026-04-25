@@ -6,7 +6,6 @@ from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
-    ChatCompletionToolParam,
 )
 from pydantic import ValidationError
 
@@ -22,8 +21,6 @@ INTERNAL_SYSTEM_INSTRUCTIONS = """
 **IMPORTANT**: Always use todos to track progress and they must add todos before performing any actions. Do not make any assumptions about the state of the todos - always read the current list before modifying it. Each todo should be checked off when completed, and the final response should include a summary of what was accomplished and the state of the todos.
 """.strip()
 
-SKILLS_INSTRUCTIONS = "**SKILLS**: Call `listskills` to discover available tools grouped as skills. Use `useskill` to activate a skill before calling its tools. Only activate the skills you actually need."
-
 
 def _ensure_list[T](value: list[T] | T | None) -> list[T]:
     if value is None:
@@ -37,7 +34,7 @@ class Agent:
         model: Model,
         *,
         agent_tools: list[type[AgentTool]],
-        skills: "dict[str, Skill] | None" = None,
+        skills: "list[Skill] | None" = None,
         system_prompt: str | None = None,
         on_response: list[ResponseHook] | ResponseHook | None = None,
         on_tool_call: list[ToolCallHook] | ToolCallHook | None = None,
@@ -46,46 +43,28 @@ class Agent:
     ):
         self.model: Model = model
         self.system_prompt = system_prompt
-        self._skills: dict[str, Skill] = skills or {}
-
-        skill_meta_tools: list[type[AgentTool]] = []
-        if self._skills:
-            from skills import ListSkills, UseSkill
-
-            skill_meta_tools = [ListSkills, UseSkill]
-
-        self._base_tools = agent_tools + [ReadTodos, ModifyTodos] + skill_meta_tools
-
-        all_skill_tools = [t for s in self._skills.values() for t in s.tools]
-        self._tools_map = {
-            cls.tool_name(): cls for cls in self._base_tools + all_skill_tools
-        }
-        self._base_tools_schema = [cls.to_json_schema() for cls in self._base_tools]
+        self._skills: list[Skill] = skills or []
+        self._tools = agent_tools + [ReadTodos, ModifyTodos]
+        self._tools_map = {cls.tool_name(): cls for cls in self._tools}
+        self._tools_schema = [cls.to_json_schema() for cls in self._tools]
         self.max_iterations = max_iterations
-        self.state = AgentState(skills_registry=self._skills)
+        self.state = AgentState()
         self.hooks = Hooks(
             after_response=_ensure_list(on_response),
             before_tool_call=_ensure_list(on_tool_call),
             after_tool_call=_ensure_list(on_tool_result),
         )
 
-    @property
-    def _tools_schema(self) -> list[ChatCompletionToolParam]:
-        active_skill_schemas = [
-            t.to_json_schema()
-            for skill_name, skill in self._skills.items()
-            if skill_name in self.state.activated_skills
-            for t in skill.tools
-        ]
-        return self._base_tools_schema + active_skill_schemas
-
     def _build_system_prompt(self) -> str:
+        from skills import format_skills_for_prompt
+
         parts = [INTERNAL_SYSTEM_INSTRUCTIONS]
-        if self._skills:
-            parts.append(SKILLS_INSTRUCTIONS)
+        skills_section = format_skills_for_prompt(self._skills)
+        if skills_section:
+            parts.append(skills_section)
         if self.system_prompt:
             parts.append(self.system_prompt)
-        return "\n".join(parts)
+        return "\n\n".join(parts)
 
     async def run(self, messages: list[ChatCompletionMessageParam]):
         messages = [

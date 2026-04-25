@@ -1,81 +1,57 @@
+import re
 from dataclasses import dataclass
-
-from pydantic import Field
-
-from tools import AgentTool, Bash, ReadFile, SearchWeb, ToolResult, WriteFile
+from pathlib import Path
 
 
 @dataclass
 class Skill:
     name: str
     description: str
-    tools: list[type[AgentTool]]
+    path: Path
 
 
-SKILLS: dict[str, Skill] = {
-    "filesystem": Skill(
-        name="filesystem",
-        description="Read and write files on the local filesystem",
-        tools=[ReadFile, WriteFile],
-    ),
-    "shell": Skill(
-        name="shell",
-        description="Execute bash commands and shell scripts",
-        tools=[Bash],
-    ),
-    "web": Skill(
-        name="web",
-        description="Search the web for documentation and information",
-        tools=[SearchWeb],
-    ),
-}
+def _parse_frontmatter(content: str) -> dict[str, str]:
+    """Parse simple key: value YAML frontmatter delimited by ---."""
+    match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
+    if not match:
+        return {}
+    result: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        if ":" in line:
+            key, _, value = line.partition(":")
+            result[key.strip()] = value.strip()
+    return result
 
 
-class ListSkills(AgentTool):
-    """Lists all available skills and their activation status. Call this to discover what tools you can unlock."""
+def load_skills(dirs: list[Path]) -> list[Skill]:
+    """Scan directories for skill subdirectories containing SKILL.md and return their metadata."""
+    skills: list[Skill] = []
+    for d in dirs:
+        if not d.exists():
+            continue
+        for skill_dir in sorted(d.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            meta = _parse_frontmatter(skill_md.read_text())
+            name = meta.get("name", "").strip()
+            description = meta.get("description", "").strip()
+            if name and description:
+                skills.append(Skill(name=name, description=description, path=skill_md))
+    return skills
 
-    def execute(self) -> ToolResult:
-        registry: dict[str, Skill] = self.state.skills_registry  # type: ignore[assignment]
-        active = self.state.activated_skills
-        lines = []
-        for name, skill in registry.items():
-            status = "[active]" if name in active else "[available]"
-            tool_names = [t.tool_name() for t in skill.tools]
-            lines.append(
-                f"**{name}** {status}: {skill.description} (tools: {', '.join(tool_names)})"
-            )
-        return ToolResult(
-            error=False,
-            name=self.tool_name(),
-            result="\n".join(lines) if lines else "No skills available.",
-        )
 
-
-class UseSkill(AgentTool):
-    """Activates a skill to unlock its tools for use. Call listskills first to see what's available."""
-
-    skill_name: str = Field(description="The name of the skill to activate")
-
-    def execute(self) -> ToolResult:
-        registry: dict[str, Skill] = self.state.skills_registry  # type: ignore[assignment]
-        skill = registry.get(self.skill_name)
-        if not skill:
-            return ToolResult(
-                error=True,
-                name=self.tool_name(),
-                result=f"Unknown skill '{self.skill_name}'. Available: {list(registry)}",
-            )
-        if self.skill_name in self.state.activated_skills:
-            tool_names = [t.tool_name() for t in skill.tools]
-            return ToolResult(
-                error=False,
-                name=self.tool_name(),
-                result=f"Skill '{self.skill_name}' is already active. Tools: {tool_names}",
-            )
-        self.state.activated_skills.add(self.skill_name)
-        tool_names = [t.tool_name() for t in skill.tools]
-        return ToolResult(
-            error=False,
-            name=self.tool_name(),
-            result=f"Skill '{self.skill_name}' activated. You now have access to: {tool_names}",
-        )
+def format_skills_for_prompt(skills: list[Skill]) -> str:
+    """Format skill metadata for injection into the system prompt (Level 1 loading)."""
+    if not skills:
+        return ""
+    lines = [
+        "## Available Skills",
+        "When a task matches a skill below, read its SKILL.md with the readfile tool to load full instructions before proceeding.",
+        "",
+    ]
+    for skill in skills:
+        lines.append(f"- **{skill.name}** (`{skill.path}`): {skill.description}")
+    return "\n".join(lines)

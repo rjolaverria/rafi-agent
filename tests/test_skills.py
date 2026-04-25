@@ -1,53 +1,136 @@
-import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from openai.types.chat import (
-    ChatCompletion,
-    ChatCompletionMessage,
-    ChatCompletionMessageToolCall,
-    ChatCompletionMessageToolCallUnion,
-)
-from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_message_tool_call import Function
 
 from agent import Agent
 from model import Model
-from skills import SKILLS, ListSkills, Skill, UseSkill
-from state import AgentState
-from tools import Bash, ReadFile, ToolResult, WriteFile
+from skills import Skill, _parse_frontmatter, format_skills_for_prompt, load_skills
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── _parse_frontmatter ────────────────────────────────────────────────────────
 
 
-def _make_state() -> AgentState:
-    return AgentState()
+class TestParseFrontmatter:
+    def test_parses_name_and_description(self):
+        content = "---\nname: my-skill\ndescription: Does something useful.\n---\n# Body"
+        result = _parse_frontmatter(content)
+        assert result["name"] == "my-skill"
+        assert result["description"] == "Does something useful."
+
+    def test_returns_empty_dict_when_no_frontmatter(self):
+        assert _parse_frontmatter("# Just a heading\nNo frontmatter.") == {}
+
+    def test_returns_empty_dict_on_malformed_delimiter(self):
+        assert _parse_frontmatter("--\nname: x\n--\n") == {}
+
+    def test_ignores_body_after_closing_delimiter(self):
+        content = "---\nname: skill\n---\ndescription: not-frontmatter"
+        result = _parse_frontmatter(content)
+        assert "description" not in result
+
+    def test_strips_whitespace_from_keys_and_values(self):
+        content = "---\n  name :  padded  \n---\n"
+        result = _parse_frontmatter(content)
+        assert result["name"] == "padded"
 
 
-def _make_completion(
-    content: str = "done",
-    tool_calls: list[ChatCompletionMessageToolCallUnion] | None = None,
-) -> ChatCompletion:
-    message = ChatCompletionMessage(role="assistant", content=content, tool_calls=tool_calls)
-    choice = Choice(finish_reason="stop", index=0, message=message)
-    return ChatCompletion(
-        id="chatcmpl-test",
-        choices=[choice],
-        created=0,
-        model="test-model",
-        object="chat.completion",
-    )
+# ── load_skills ───────────────────────────────────────────────────────────────
 
 
-def _make_fn_tool_call(
-    name: str, args: dict, call_id: str = "call_1"
-) -> ChatCompletionMessageToolCall:
-    return ChatCompletionMessageToolCall(
-        id=call_id,
-        type="function",
-        function=Function(name=name, arguments=json.dumps(args)),
-    )
+class TestLoadSkills:
+    def _write_skill(self, base: Path, dir_name: str, name: str, description: str) -> Path:
+        skill_dir = base / dir_name
+        skill_dir.mkdir(parents=True)
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\n# Instructions\nDo stuff."
+        )
+        return skill_md
+
+    def test_loads_skill_from_directory(self, tmp_path: Path):
+        skill_md = self._write_skill(tmp_path, "my-skill", "my-skill", "Does something.")
+        skills = load_skills([tmp_path])
+        assert len(skills) == 1
+        assert skills[0].name == "my-skill"
+        assert skills[0].description == "Does something."
+        assert skills[0].path == skill_md
+
+    def test_skips_missing_directory(self, tmp_path: Path):
+        skills = load_skills([tmp_path / "nonexistent"])
+        assert skills == []
+
+    def test_skips_files_in_skills_dir(self, tmp_path: Path):
+        (tmp_path / "not-a-dir.md").write_text("just a file")
+        skills = load_skills([tmp_path])
+        assert skills == []
+
+    def test_skips_dirs_without_skill_md(self, tmp_path: Path):
+        (tmp_path / "empty-dir").mkdir()
+        skills = load_skills([tmp_path])
+        assert skills == []
+
+    def test_skips_skill_with_missing_name(self, tmp_path: Path):
+        (tmp_path / "bad-skill").mkdir()
+        (tmp_path / "bad-skill" / "SKILL.md").write_text(
+            "---\ndescription: No name here.\n---\n"
+        )
+        skills = load_skills([tmp_path])
+        assert skills == []
+
+    def test_skips_skill_with_missing_description(self, tmp_path: Path):
+        (tmp_path / "bad-skill").mkdir()
+        (tmp_path / "bad-skill" / "SKILL.md").write_text("---\nname: no-desc\n---\n")
+        skills = load_skills([tmp_path])
+        assert skills == []
+
+    def test_loads_from_multiple_dirs(self, tmp_path: Path):
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        self._write_skill(dir_a, "skill-a", "skill-a", "Skill A.")
+        self._write_skill(dir_b, "skill-b", "skill-b", "Skill B.")
+        skills = load_skills([dir_a, dir_b])
+        names = [s.name for s in skills]
+        assert "skill-a" in names
+        assert "skill-b" in names
+
+    def test_returns_skills_sorted_by_directory_name(self, tmp_path: Path):
+        self._write_skill(tmp_path, "z-skill", "z-skill", "Last.")
+        self._write_skill(tmp_path, "a-skill", "a-skill", "First.")
+        skills = load_skills([tmp_path])
+        assert skills[0].name == "a-skill"
+        assert skills[1].name == "z-skill"
+
+
+# ── format_skills_for_prompt ──────────────────────────────────────────────────
+
+
+class TestFormatSkillsForPrompt:
+    def test_returns_empty_string_for_no_skills(self):
+        assert format_skills_for_prompt([]) == ""
+
+    def test_includes_skill_name_and_description(self):
+        skills = [Skill(name="pdf", description="Work with PDFs.", path=Path("/s/SKILL.md"))]
+        result = format_skills_for_prompt(skills)
+        assert "pdf" in result
+        assert "Work with PDFs." in result
+
+    def test_includes_path_to_skill_file(self):
+        skills = [Skill(name="x", description="desc", path=Path("/skills/x/SKILL.md"))]
+        result = format_skills_for_prompt(skills)
+        assert "/skills/x/SKILL.md" in result
+
+    def test_includes_all_skills(self):
+        skills = [
+            Skill(name="a", description="Skill A.", path=Path("/a/SKILL.md")),
+            Skill(name="b", description="Skill B.", path=Path("/b/SKILL.md")),
+        ]
+        result = format_skills_for_prompt(skills)
+        assert "Skill A." in result
+        assert "Skill B." in result
+
+
+# ── Agent with skills ─────────────────────────────────────────────────────────
 
 
 @pytest.fixture()
@@ -62,200 +145,38 @@ def model(mock_client: MagicMock) -> Model:
     return Model(name="test-model", client=mock_client)
 
 
-# ── Skill dataclass ───────────────────────────────────────────────────────────
-
-
-class TestSkill:
-    def test_skill_has_name_description_tools(self):
-        skill = Skill(name="fs", description="File ops", tools=[ReadFile, WriteFile])
-        assert skill.name == "fs"
-        assert skill.description == "File ops"
-        assert skill.tools == [ReadFile, WriteFile]
-
-
-# ── SKILLS registry ───────────────────────────────────────────────────────────
-
-
-class TestSkillsRegistry:
-    def test_default_skills_present(self):
-        assert "filesystem" in SKILLS
-        assert "shell" in SKILLS
-        assert "web" in SKILLS
-
-    def test_filesystem_skill_tools(self):
-        assert ReadFile in SKILLS["filesystem"].tools
-        assert WriteFile in SKILLS["filesystem"].tools
-
-    def test_shell_skill_tools(self):
-        assert Bash in SKILLS["shell"].tools
-
-
-# ── ListSkills tool ───────────────────────────────────────────────────────────
-
-
-class TestListSkills:
-    def _make_tool(
-        self,
-        activated: set[str] | None = None,
-        registry: dict | None = None,
-    ) -> ListSkills:
-        state = _make_state()
-        if activated:
-            state.activated_skills = activated
-        state.skills_registry = registry if registry is not None else dict(SKILLS)
-        return ListSkills.model_validate({"state": state})
-
-    def test_returns_available_status_when_no_skills_active(self):
-        tool = self._make_tool()
-        result = tool.execute()
-        assert result.error is False
-        assert "[available]" in result.result
-
-    def test_active_skill_shows_active_status(self):
-        tool = self._make_tool(activated={"filesystem"})
-        result = tool.execute()
-        assert "[active]" in result.result
-        assert "[available]" in result.result
-
-    def test_lists_tool_names_per_skill(self):
-        tool = self._make_tool()
-        result = tool.execute()
-        assert "readfile" in result.result
-        assert "writefile" in result.result
-        assert "bash" in result.result
-
-    def test_empty_skills_message(self):
-        tool = self._make_tool(registry={})
-        result = tool.execute()
-        assert result.result == "No skills available."
-
-
-# ── UseSkill tool ─────────────────────────────────────────────────────────────
-
-
-class TestUseSkill:
-    def _make_tool(self, skill_name: str, activated: set[str] | None = None) -> UseSkill:
-        state = _make_state()
-        state.skills_registry = dict(SKILLS)
-        if activated:
-            state.activated_skills = set(activated)
-        return UseSkill.model_validate({"skill_name": skill_name, "state": state})
-
-    def test_activates_known_skill(self):
-        tool = self._make_tool("filesystem")
-        result = tool.execute()
-        assert result.error is False
-        assert "filesystem" in tool.state.activated_skills
-
-    def test_returns_tool_names_on_activation(self):
-        tool = self._make_tool("shell")
-        result = tool.execute()
-        assert "bash" in result.result
-
-    def test_unknown_skill_returns_error(self):
-        tool = self._make_tool("nonexistent")
-        result = tool.execute()
-        assert result.error is True
-        assert "nonexistent" in result.result
-
-    def test_already_active_skill_returns_info_not_error(self):
-        tool = self._make_tool("filesystem", activated={"filesystem"})
-        result = tool.execute()
-        assert result.error is False
-        assert "already active" in result.result
-
-    def test_already_active_skill_does_not_duplicate(self):
-        tool = self._make_tool("filesystem", activated={"filesystem"})
-        tool.execute()
-        assert tool.state.activated_skills == {"filesystem"}
-
-
-# ── Agent with skills ─────────────────────────────────────────────────────────
-
-
 class TestAgentWithSkills:
-    def _make_skills(self) -> dict[str, Skill]:
-        from tools import Bash, ReadFile
+    def _make_skills(self, tmp_path: Path) -> list[Skill]:
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text(
+            "---\nname: my-skill\ndescription: Helps with my tasks.\n---\n# Instructions"
+        )
+        return load_skills([tmp_path])
 
-        return {
-            "fs": Skill(name="fs", description="Filesystem", tools=[ReadFile]),
-            "sh": Skill(name="sh", description="Shell", tools=[Bash]),
-        }
-
-    def test_skill_tools_not_in_initial_schema(self, model: Model):
-        skills = self._make_skills()
-        agent = Agent(model, agent_tools=[], skills=skills)
-        names = [s["function"]["name"] for s in agent._tools_schema]
-        assert "readfile" not in names
-        assert "bash" not in names
-
-    def test_listskills_and_useskill_always_in_schema(self, model: Model):
-        skills = self._make_skills()
-        agent = Agent(model, agent_tools=[], skills=skills)
-        names = [s["function"]["name"] for s in agent._tools_schema]
-        assert "listskills" in names
-        assert "useskill" in names
-
-    def test_activated_skill_tools_appear_in_schema(self, model: Model):
-        skills = self._make_skills()
-        agent = Agent(model, agent_tools=[], skills=skills)
-        agent.state.activated_skills.add("fs")
-        names = [s["function"]["name"] for s in agent._tools_schema]
-        assert "readfile" in names
-        assert "bash" not in names
-
-    def test_multiple_activated_skills_all_appear(self, model: Model):
-        skills = self._make_skills()
-        agent = Agent(model, agent_tools=[], skills=skills)
-        agent.state.activated_skills.update({"fs", "sh"})
-        names = [s["function"]["name"] for s in agent._tools_schema]
-        assert "readfile" in names
-        assert "bash" in names
-
-    def test_all_skill_tools_executable_via_tools_map(self, model: Model):
-        skills = self._make_skills()
-        agent = Agent(model, agent_tools=[], skills=skills)
-        assert "readfile" in agent._tools_map
-        assert "bash" in agent._tools_map
-
-    def test_no_skills_behaves_like_before(self, model: Model):
-        from tests.test_agent import FakeTool
-
-        agent = Agent(model, agent_tools=[FakeTool])
-        names = [s["function"]["name"] for s in agent._tools_schema]
-        assert "faketool" in names
-        assert "listskills" not in names
-        assert "useskill" not in names
-
-    def test_skills_system_instructions_in_system_prompt(self, model: Model):
-        skills = self._make_skills()
+    def test_skill_metadata_in_system_prompt(self, model: Model, tmp_path: Path):
+        skills = self._make_skills(tmp_path)
         agent = Agent(model, agent_tools=[], skills=skills)
         prompt = agent._build_system_prompt()
-        assert "listskills" in prompt
-        assert "useskill" in prompt
+        assert "my-skill" in prompt
+        assert "Helps with my tasks." in prompt
 
-    def test_no_skills_instructions_without_skills(self, model: Model):
+    def test_skill_path_in_system_prompt(self, model: Model, tmp_path: Path):
+        skills = self._make_skills(tmp_path)
+        agent = Agent(model, agent_tools=[], skills=skills)
+        prompt = agent._build_system_prompt()
+        assert "SKILL.md" in prompt
+
+    def test_no_skills_no_skills_section(self, model: Model):
         agent = Agent(model, agent_tools=[])
         prompt = agent._build_system_prompt()
-        assert "listskills" not in prompt
+        assert "Available Skills" not in prompt
 
-    @pytest.mark.asyncio
-    async def test_useskill_during_run_unlocks_tools(
-        self, model: Model, mock_client: MagicMock
-    ):
-        skills = self._make_skills()
-        agent = Agent(model, agent_tools=[], skills=skills)
+    def test_tool_schema_unchanged_by_skills(self, model: Model, tmp_path: Path):
+        from tests.test_agent import FakeTool
 
-        use_skill_call = _make_fn_tool_call("useskill", {"skill_name": "fs"}, "call_1")
-        first = _make_completion(content="activating", tool_calls=[use_skill_call])
-        second = _make_completion(content="done")
-        mock_client.chat.completions.create.side_effect = [first, second]
-
-        await agent.run([{"role": "user", "content": "read a file"}])
-
-        assert "fs" in agent.state.activated_skills
-        second_call_tools = mock_client.chat.completions.create.call_args_list[1].kwargs[
-            "tools"
-        ]
-        tool_names = [t["function"]["name"] for t in second_call_tools]
-        assert "readfile" in tool_names
+        skills = self._make_skills(tmp_path)
+        with_skills = Agent(model, agent_tools=[FakeTool], skills=skills)
+        without_skills = Agent(model, agent_tools=[FakeTool])
+        assert with_skills._tools_schema == without_skills._tools_schema

@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass(slots=True)
@@ -44,5 +43,3 @@ class Todos:
 class AgentState:
     iterations: int = 0
     todos: Todos = field(default_factory=Todos)
-    activated_skills: set[str] = field(default_factory=set)
-    skills_registry: dict[str, Any] = field(default_factory=dict)
